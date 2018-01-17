@@ -8,7 +8,7 @@
 * Do not shorten table name aliases
 * Use the backtick (`) before and after table & column names
 
-** Note that backticks are not ANSI-SQL compliant, which implies that they do
+**Note that backticks are not ANSI-SQL compliant, which implies that they do
 not work in SQL Server.**
  Setting:
 ```sql
