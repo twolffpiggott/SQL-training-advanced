@@ -334,7 +334,7 @@ SELECT
 FROM "employee"
 WHERE "id" BETWEEN 12340 AND 12400;
 ```
-## Coding Practice
+### Coding Practice
 ```sql
 CREATE INDEX idx_personal_code_2chars ON "sample_staff"."employee" (personal_code(2));
 
@@ -394,4 +394,113 @@ WHERE 1=1
  AND "contract"."archive_code" = 'DA970'
  AND "contract"."deleted_flag" = 0
 ;
+```
+
+## Partitions
+
+Types of partitions:
+* Partition by range
+* Partition by list
+* Partition by hash
+* Partition by keys
+
+Partition by range:
+```sql
+CREATE TABLE "invoice" (
+  "id" int(11) unsigned NOT NULL AUTO_INCREMENT,
+  "employee_id" int(11) unsigned NOT NULL DEFAULT '0',
+  "invoiced_date" date NOT NULL,
+  "paid_flag" tinyint(4) NOT NULL DEFAULT '0',
+  "insert_dt" datetime NOT NULL,
+  "insert_user_id" int(11) NOT NULL DEFAULT '-1',
+  "insert_process_code" varchar(255) DEFAULT NULL,
+  "update_dt" timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  "update_user_id" int(11) NOT NULL DEFAULT '-1',
+  "update_process_code" varchar(255) DEFAULT NULL,
+  "deleted_flag" tinyint(4) NOT NULL DEFAULT '0',
+  PRIMARY KEY ("id", "invoiced_date")
+) ENGINE=InnoDB
+	DEFAULT CHARSET=utf8
+    PARTITION BY RANGE( YEAR(invoiced_date) )
+    SUBPARTITION BY HASH( MONTH(invoiced_date) )
+    SUBPARTITIONS 12 (
+        PARTITION p1984 VALUES LESS THAN (1985),
+        PARTITION p1985 VALUES LESS THAN (1986),
+        PARTITION p1986 VALUES LESS THAN (1987),
+        PARTITION p1987 VALUES LESS THAN (1988),
+        PARTITION p1988 VALUES LESS THAN (1989),
+        PARTITION p1989 VALUES LESS THAN (1990),
+        PARTITION p1990 VALUES LESS THAN (1991),
+        PARTITION p1991 VALUES LESS THAN (1992),
+        PARTITION p1992 VALUES LESS THAN (1993),
+        PARTITION p1993 VALUES LESS THAN (1994),
+        PARTITION pOTHER VALUES LESS THAN MAXVALUE
+    )
+;
+```
+Partition by list:
+```sql
+CREATE TABLE employee (
+    id INT NOT NULL,
+    store_id INT,
+		...
+)
+PARTITION BY LIST(store_id) (
+    PARTITION pNorth VALUES IN (3,5,6,9,17),
+    PARTITION pEast VALUES IN (1,2,10,11,19,20),
+    PARTITION pWest VALUES IN (4,12,13,14,18),
+    PARTITION pCentral VALUES IN (7,8,15,16)
+);
+```
+
+### Coding Practice
+
+Create a new table `sample_staff`.`invoice_partitioned` based on `sample_staff`.`invoice`, but change the following:
+* add one more column: `department_code`
+* remove the current partitions & sub-partitions
+
+Then, copy data from `invoice` to the new table and also fill in the new column based on the department which the user was a part at the time of `invoiced_date`.
+
+Add new `LIST` partitioning to `invoice` based on the `department_code` (see `sample_staff`.`department`.`code`).
+
+```sql
+CREATE TABLE "sample_staff"."invoice_partitioned"
+SELECT
+  "invoice"."id",
+  "invoice"."employee_id",
+  "invoice"."invoiced_date",
+  "invoice"."paid_flag",
+  "invoice"."insert_dt",
+  "invoice"."insert_user_id",
+  "invoice"."insert_process_code",
+  "invoice"."update_dt",
+  "invoice"."update_user_id",
+  "invoice"."update_process_code",
+  "invoice"."deleted_flag",
+  "department"."code" as department_code
+FROM "sample_staff"."invoice"
+INNER JOIN "sample_staff"."department_employee_rel" ON 1=1
+  AND "invoice"."employee_id" = "department_employee_rel"."employee_id"
+  AND "invoice"."invoiced_date" BETWEEN "department_employee_rel"."from_date" AND IFNULL("department_employee_rel"."to_date", '2002-08-01')
+  -- the IFNULL function allows an alternative value to be returned if an expression evaluates as NULL
+  AND "department_employee_rel"."deleted_flag" = 0
+INNER JOIN "sample_staff"."department" ON 1=1
+  AND "department"."id" = "department_employee_rel"."department_id";
+
+-- check whether table is partitioned (shows info for all tables)
+SHOW TABLE STATUS;
+
+SELECT DISTINCT("department"."code")
+FROM "sample_staff"."department"
+LIMIT 50;
+
+SHOW COLUMNS
+FROM "sample_staff"."invoice_partitioned";
+
+ALTER TABLE "sample_staff"."invoice_partitioned"
+PARTITION BY LIST COLUMNS (department_code) (
+  PARTITION pDepts1 VALUES IN ('MKT', 'HR', 'PROD'),
+  PARTITION pDepts2 VALUES IN ('FIN', 'RES', 'QA'),
+  PARTITION pDepts3 VALUES IN ('SAL', 'DEV', 'CS')
+);
 ```
