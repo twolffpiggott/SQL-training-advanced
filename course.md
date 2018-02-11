@@ -504,3 +504,226 @@ PARTITION BY LIST COLUMNS (department_code) (
   PARTITION pDepts3 VALUES IN ('SAL', 'DEV', 'CS')
 );
 ```
+
+## Variables
+
+Types of variables:
+
+* **Global** - server system variables `@@version`
+* **Session** - user-defined variables `@var`
+* **Local** - declared in a function or procedure `DECLARE var2 INT`;
+
+### Session variables
+Scoped within a session, defined by user.
+```sql
+SELECT @var3 := IFNULL(@var3, 0) + 2;
+
+SET @var4 = (SELECT COUNT(*) FROM "sample_staff"."employee");
+SELECT @var4;
+```
+
+Using Session variables enables flexible queries:
+```sql
+SELECT
+	"date"."date",
+	@day_of_week := DAYOFWEEK(date.date) AS day_of_week,
+	CASE
+		WHEN @day_of_week = 2 /* Monday */ THEN 'Thanks God Its Monday!'
+		ELSE 'Good morning'
+	END AS welcome_message,
+	CASE
+		WHEN @day_of_week = 6 /* Friday */ THEN 'Have a great weekend!'
+		ELSE 'Good bye'
+	END AS good_bye_message
+FROM "sample_staff"."date"
+WHERE 1=1
+	AND "date"."date" BETWEEN '2016-01-01' AND '2016-01-14';
+
+SET @employee_id = '10001';
+
+SELECT
+  "salary"."id",
+  "salary"."employee_id",
+  "salary"."salary_amount"
+FROM "sample_staff"."salary"
+WHERE 1=1
+  AND "salary"."employee_id" = @employee_id;
+
+-- Define the variables
+SET @employee_id = 10001;
+SET @columns = 'employee_id, salary_amount';
+SET @table_name = 'salary';
+
+-- Compose the query
+SET @select_query = CONCAT('SELECT id, ', @columns, ' FROM ',
+			@table_name, ' WHERE employee_id = ', @employee_id);
+
+-- Prepare & execute
+PREPARE stmt FROM @select_query;
+EXECUTE stmt;
+```
+
+### Coding Practice
+
+```sql
+SET @company_average = (SELECT AVG("salary_amount") FROM "sample_staff"."salary");
+SET @year_month =  '2000-01-01';
+
+SELECT
+  @year_month AS "year_month",
+  "department"."id",
+  "department"."name",
+  AVG("salary_subset"."salary_amount") AS "department_average_salary",
+  @company_average AS "company_average_salary"
+FROM
+  (
+  SELECT
+    "salary"."salary_amount",
+    "salary"."employee_id"
+  FROM "sample_staff"."salary"
+  WHERE 1=1
+    AND "salary"."from_date" <=  STR_TO_DATE('2001-01-01', '%Y-%m-%d')
+    AND "salary"."to_date" >=  STR_TO_DATE('2001-01-01', '%Y-%m-%d')
+  ) AS "salary_subset"
+INNER JOIN
+  (
+  SELECT
+    "department_employee_rel"."department_id",
+    "department_employee_rel"."employee_id"
+  FROM "sample_staff"."department_employee_rel"
+  WHERE 1=1
+    AND "department_employee_rel"."from_date" <=  STR_TO_DATE('2001-01-01', '%Y-%m-%d')
+    AND "department_employee_rel"."to_date" >=  STR_TO_DATE('2001-01-01', '%Y-%m-%d')
+  ) AS "dept_empl_subset"
+ON 1=1
+  AND "salary_subset"."employee_id" = "dept_empl_subset"."employee_id"
+INNER JOIN
+  "sample_staff"."department"
+ON 1=1
+  AND "dept_empl_subset"."department_id" = "department"."id"
+GROUP BY "department"."id";
+```
+
+## Analytic (window) functions
+
+Not supported in MYSQL 5.7. Like window functions such as `ROW_NUMBER` in Postgres. Window/analytic functions are available in MYSQL as of v8.0.2. See [here](https://mysqlserverteam.com/mysql-8-0-2-introducing-window-functions/) for a good discussion: 'a window function can be thought of as just another SQL function, except that its value is based on the value of other rows in addition to the values of the for which it is called, i.e. they function as a window into other rows.'
+
+Window functions can be emulated using variables:
+```sql
+SET @dummy_row_number = 0;
+
+SELECT
+  @dummy_row_number := @dummy_row_number + 1 as "dummy_row_number",
+  "department".*
+FROM "sample_staff"."department";
+```
+Above the row number assignment implicitly depends on the ordering and values assigned to previous rows.
+
+More excellent insight into groupwise selection in MYSQL in [this blog post](https://www.xaprb.com/blog/2006/12/07/how-to-select-the-firstleastmax-row-per-group-in-sql/). Following from which, an efficient way to select the top N rows from each group:
+
+```sql
+set @num := 0, @type := '';
+
+select type, variety, price
+from (
+   select type, variety, price,
+      @num := if(@type = type, @num + 1, 1) as row_number,
+      @type := type as dummy
+  from fruits
+  order by type, price
+) as x where x.row_number <= 2;
+```
+
+### Coding practice
+Draft until `sample_staff.user-stat` table is populated.
+
+## Functions
+Cases like the below are effective, but can be cumbersome when translating across tables and into different contexts.
+
+```sql
+SELECT /* Is multinight? */
+	@checkin_date := '2016-05-09' AS checkin_date,
+	@checkout_date := '2016-05-10' AS checkout_date,
+	CASE
+		WHEN DATEDIFF(@checkout_date, @checkin_date) = 1 THEN 0
+		ELSE 1
+	END AS is_multinight
+;
+```
+This is where functions come in- to wrap this into a more flexible form.
+```sql
+DROP FUNCTION IF EXISTS "FC_IS_MULTINIGHT";
+
+-- the delimiter is temporarily changed so the function can be properly defined using the old delimeter without prematurely signalling to the engine that the statement is over.
+
+DELIMITER //
+
+CREATE FUNCTION "FC_IS_MULTINIGHT"(
+	checkin_date DATE,
+	checkout_date DATE
+) RETURNS TINYINT(1)
+BEGIN
+	RETURN CASE
+	  WHEN DATEDIFF(checkout_date, checkin_date) = 1 THEN FALSE
+	  ELSE TRUE
+	END;
+END;
+//
+
+DELIMITER ;
+```
+The function can now be used in the general case:
+```sql
+SELECT
+	@checkin_date := '2016-05-09' AS checkin_date,
+	@checkout_date := '2016-05-10' AS checkout_date,
+  FC_IS_MULTINIGHT(@checkin_date, @checkout_date) AS is_multinight
+;
+```
+
+### Coding standards for functions and Procedures
+
+* Always use `DELIMITER`, even if it's not necessary
+* Split parameters on a new line
+* Uppercase keywords, lowercase parameters, variables and table/column names
+* Uppercase function and procedure names
+* Comment a lot
+* Add prefixes
+  * Functions: `FC_`
+  * Procedures: `INS_` / `DEL_` / `UPD_` / `SEL_`
+* When saving code to repository, add delimiter & `DELETE ... IF EXISTS`
+
+### Coding Practice
+
+Distance between two coordinates:
+```sql
+DROP FUNCTION IF EXISTS "FC_HAVERSINE_DISTANCE";
+DELIMITER //
+CREATE FUNCTION "FC_HAVERSINE_DISTANCE"(
+  lat1 FLOAT(23,19),
+  lon1 FLOAT(23,19),
+  lat2 FLOAT(23,19),
+  lon2 FLOAT(23,19)
+) RETURNS FLOAT(23,19)
+BEGIN
+  DECLARE r INT;
+  DECLARE dlat FLOAT(23,19);
+  DECLARE dlon FLOAT(23,19);
+  DECLARE a FLOAT(23,19);
+  DECLARE c FLOAT(23,19);
+  DECLARE d FLOAT(23,19);
+
+  SET r = 6371;
+  SET dlat = RADIANS(lat2-lat1);
+  SET dlon = RADIANS(lon2-lon1);
+  SET a = SIN(dlat/2) * SIN(dlat/2) + COS(RADIANS(lat1)) * COS(RADIANS(lat2)) * SIN(dlon/2) * SIN(dlon/2);
+  SET c = 2 * ATAN(SQRT(a) / SQRT(1-a));
+  SET d = r * c;
+  RETURN  d;
+END;
+//
+DELIMITER ;
+
+-- distance between Cape Town and Stellenbosch
+SELECT FC_HAVERSINE_DISTANCE(-33.924869, 18.424055, -33.932105, 18.860152);
+```
